@@ -18,17 +18,21 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-type configmap struct {
-	configMapNames map[string]string
+type configMap struct {
+	Name string
+	Data map[string]string
 }
 
-func NewConfigMap() *configmap {
-	return &configmap{
-		configMapNames: make(map[string]string),
+var configMapList []configMap
+
+func NewConfigMap() *configMap {
+	return &configMap{
+		Name: "",
+		Data: make(map[string]string),
 	}
 }
 
-func (cm *configmap) Run(client *kubernetes.Clientset, ctx context.Context) {
+func (cm *configMap) Run(client *kubernetes.Clientset, ctx context.Context) {
 	// create a shared informer factory
 	//factory := informer.NewSharedInformerFactory(client, 0)
 	factory := informer.NewSharedInformerFactoryWithOptions(client, 0, informer.WithNamespace(v1.NamespaceAll),
@@ -41,8 +45,8 @@ func (cm *configmap) Run(client *kubernetes.Clientset, ctx context.Context) {
 
 	// Add event handlers to the informer on which we should act.
 	cmInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    cm.AddFunc,
-		DeleteFunc: cm.DeleteFunc,
+		AddFunc: cm.AddFunc,
+		//	DeleteFunc: cm.DeleteFunc,
 	})
 	// Start the informer
 	factory.Start(ctx.Done())
@@ -56,35 +60,42 @@ func (cm *configmap) Run(client *kubernetes.Clientset, ctx context.Context) {
 	<-ctx.Done()
 }
 
-func (cm *configmap) AddFunc(obj interface{}) {
-	configMap := obj.(*v1.ConfigMap)
+func (cm *configMap) AddFunc(obj interface{}) {
+	cmObj := obj.(*v1.ConfigMap)
 	// Handle the add event
-	log.Println("Added ConfigMap: ", configMap.Name)
-	// Add the configmap name to the map
-	cm.configMapNames[configMap.Name] = configMap.Name
+	log.Println("Added ConfigMap: ", cmObj.Name)
+	// Append to configMapList list
+	configMapList = append(configMapList, configMap{
+		Name: cmObj.Name,
+		Data: cmObj.Data,
+	})
 }
 
-func (cm *configmap) DeleteFunc(obj interface{}) {
-	configMap := obj.(*v1.ConfigMap)
-	// Handle the add event
-	log.Println("Deleted ConfigMap: ", configMap.Name)
-	// Add the configmap name to the map
-	delete(cm.configMapNames, configMap.Name)
-}
+// func (cm *configMap) DeleteFunc(obj interface{}) {
+// 	configMap := obj.(*v1.ConfigMap)
+// 	// Handle the add event
+// 	log.Println("Deleted ConfigMap: ", configMap.Name)
+// 	// Add the configMap name to the map
+// 	delete(cm.configMapNames, configMap.Name)
+// }
 
-func (cm *configmap) ReadConfigMapNames() []string {
-	names := make([]string, 0)
-	for _, name := range cm.configMapNames {
-		names = append(names, name)
+func (cm *configMap) ReadConfigMapNames() []configMap {
+	mapList := make([]configMap, 0)
+	for _, name := range configMapList {
+		mapList = append(mapList, configMap{
+			Name: name.Name,
+			Data: name.Data,
+		})
 	}
-	return names
+	return mapList
 }
 
-func (cm *configmap) PrintConfigMaps() {
+func (cm *configMap) PrintConfigMaps() {
 	for {
-		if len(cm.configMapNames) != 0 {
+		if len(configMapList) != 0 {
 			for _, name := range cm.ReadConfigMapNames() {
-				log.Println("ConfigMap: ", name)
+				log.Println("Name ", name.Name)
+				log.Println("Data: ", name.Data)
 			}
 		} else {
 			log.Println("No ConfigMaps found")
