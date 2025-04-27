@@ -46,8 +46,19 @@ func (cm *configmap) Run(client *kubernetes.Clientset, ctx context.Context) {
 }
 
 func (cm *configmap) AddFunc(obj interface{}) {
+	configMap := obj.(*v1.ConfigMap)
 	// Handle the add event
-	fmt.Println("added a configmap with name: ", obj.(*v1.ConfigMap).Name)
+	fmt.Println("added a configmap with name: ", configMap.Name)
+	// Add the configmap name to the map
+	cm.configMapNames[configMap.Name] = configMap.Name
+}
+
+func (cm *configmap) ReadConfigMapNames() []string {
+	names := make([]string, 0)
+	for _, name := range cm.configMapNames {
+		names = append(names, name)
+	}
+	return names
 }
 
 func main() {
@@ -74,6 +85,7 @@ func main() {
 
 	cm := NewConfigMap()
 	fmt.Println("Starting ConfigMap controller")
+	go cm.ReadConfigMapNames()
 	cm.Run(clientset, ctx)
 
 }
