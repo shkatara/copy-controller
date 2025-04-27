@@ -41,7 +41,8 @@ func (cm *configmap) Run(client *kubernetes.Clientset, ctx context.Context) {
 
 	// Add event handlers to the informer on which we should act.
 	cmInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: cm.AddFunc,
+		AddFunc:    cm.AddFunc,
+		DeleteFunc: cm.DeleteFunc,
 	})
 	// Start the informer
 	factory.Start(ctx.Done())
@@ -63,6 +64,14 @@ func (cm *configmap) AddFunc(obj interface{}) {
 	cm.configMapNames[configMap.Name] = configMap.Name
 }
 
+func (cm *configmap) DeleteFunc(obj interface{}) {
+	configMap := obj.(*v1.ConfigMap)
+	// Handle the add event
+	log.Println("Deleted ConfigMap: ", configMap.Name)
+	// Add the configmap name to the map
+	delete(cm.configMapNames, configMap.Name)
+}
+
 func (cm *configmap) ReadConfigMapNames() []string {
 	names := make([]string, 0)
 	for _, name := range cm.configMapNames {
@@ -73,8 +82,12 @@ func (cm *configmap) ReadConfigMapNames() []string {
 
 func (cm *configmap) PrintConfigMaps() {
 	for {
-		for _, name := range cm.ReadConfigMapNames() {
-			log.Println("ConfigMap: ", name)
+		if len(cm.configMapNames) != 0 {
+			for _, name := range cm.ReadConfigMapNames() {
+				log.Println("ConfigMap: ", name)
+			}
+		} else {
+			log.Println("No ConfigMaps found")
 		}
 		time.Sleep(5 * time.Second)
 	}
