@@ -107,7 +107,7 @@ func (cm *configMap) CopyConfigMaps(clientset *kubernetes.Clientset) {
 			log.Println("No ConfigMaps found")
 		}
 
-		for _, name := range cm.FinalConfigMaps() {
+		for i, name := range cm.FinalConfigMaps() {
 			cmObj.Name = name.Name
 			cmObj.Data = name.Data
 			cmObj.Namespace = name.Namespace
@@ -130,6 +130,9 @@ func (cm *configMap) CopyConfigMaps(clientset *kubernetes.Clientset) {
 				if errors.IsNotFound(err) {
 					log.Println(cmObj.Name, "is already deleted.")
 				}
+				// Remove the configMap from the list
+				configMapList = append(configMapList[:i], configMapList[i+1:]...)
+
 			}
 
 		}
