@@ -8,10 +8,9 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	informer "k8s.io/client-go/informers"
-
-	error "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -20,6 +19,7 @@ import (
 type configMap struct {
 	Name      string
 	Namespace string
+	State     string
 	Data      map[string]string
 }
 
@@ -30,6 +30,7 @@ func NewConfigMap() *configMap {
 		Name:      "",
 		Data:      make(map[string]string),
 		Namespace: "",
+		State:     "",
 	}
 }
 
@@ -44,8 +45,8 @@ func (cm *configMap) Run(client *kubernetes.Clientset, ctx context.Context) {
 
 	// Add event handlers to the informer on which we should act.
 	cmInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: cm.AddFunc,
-		//	DeleteFunc: cm.DeleteFunc,
+		AddFunc:    cm.AddFunc,
+		DeleteFunc: cm.DeleteFunc,
 	})
 	// Start the informer
 	factory.Start(ctx.Done())
@@ -68,16 +69,21 @@ func (cm *configMap) AddFunc(obj interface{}) {
 		Name:      cmObj.Name,
 		Data:      cmObj.Data,
 		Namespace: cmObj.Namespace,
+		State:     "add",
 	})
 }
 
-// func (cm *configMap) DeleteFunc(obj interface{}) {
-// 	configMap := obj.(*v1.ConfigMap)
-// 	// Handle the add event
-// 	log.Println("Deleted ConfigMap: ", configMap.Name)
-// 	// Add the configMap name to the map
-// 	delete(cm.configMapNames, configMap.Name)
-// }
+func (cm *configMap) DeleteFunc(obj interface{}) {
+	cmObj := obj.(*v1.ConfigMap)
+	// Handle the add event
+	log.Println("Deleted ConfigMap: ", cmObj.Name)
+	// Change the state of the configMap to deleted
+	for i, name := range configMapList {
+		if name.Name == cmObj.Name {
+			configMapList[i].State = "delete"
+		}
+	}
+}
 
 func (cm *configMap) FinalConfigMaps() []configMap {
 	mapList := make([]configMap, 0)
@@ -86,6 +92,7 @@ func (cm *configMap) FinalConfigMaps() []configMap {
 			Name:      name.Name,
 			Data:      name.Data,
 			Namespace: name.Namespace,
+			State:     name.State,
 		})
 	}
 	return mapList
@@ -104,10 +111,27 @@ func (cm *configMap) CopyConfigMaps(clientset *kubernetes.Clientset) {
 			cmObj.Name = name.Name
 			cmObj.Data = name.Data
 			cmObj.Namespace = name.Namespace
-			_, err := clientset.CoreV1().ConfigMaps(name.Namespace).Create(context.TODO(), cmObj, metav1.CreateOptions{})
-			if error.IsAlreadyExists(err) {
-				log.Println(cmObj.Name, "is already updated.")
+			//fmt.Println("state is: ", name.State)
+			// log.Println("Adding ConfigMap: ", cmObj.Name)
+			// _, err := clientset.CoreV1().ConfigMaps(name.Namespace).Create(context.TODO(), cmObj, metav1.CreateOptions{})
+			// if error.IsAlreadyExists(err) {
+			// 	log.Println(cmObj.Name, "is already updated.")
+			// }
+
+			if name.State == "add" {
+				log.Println("Adding ConfigMap: ", cmObj.Name)
+				_, err := clientset.CoreV1().ConfigMaps(name.Namespace).Create(context.TODO(), cmObj, metav1.CreateOptions{})
+				if errors.IsAlreadyExists(err) {
+					log.Println(cmObj.Name, "is already updated.")
+				}
+			} else if name.State == "delete" {
+				log.Println("Deleting ConfigMap: ", cmObj.Name)
+				err := clientset.CoreV1().ConfigMaps(name.Namespace).Delete(context.TODO(), cmObj.Name, metav1.DeleteOptions{})
+				if errors.IsNotFound(err) {
+					log.Println(cmObj.Name, "is already deleted.")
+				}
 			}
+
 		}
 		time.Sleep(5 * time.Second)
 
@@ -135,7 +159,6 @@ func main() {
 
 	cm := NewConfigMap()
 	fmt.Println("Starting ConfigMap controller")
-	// go cm.PrintConfigMaps()
 	go cm.CopyConfigMaps(destClientSet)
 	cm.Run(sourceClientSet, ctx)
 }
