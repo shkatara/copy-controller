@@ -5,42 +5,41 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"path/filepath"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	informer "k8s.io/client-go/informers"
 
+	error "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
 )
 
 type configMap struct {
-	Name string
-	Data map[string]string
+	Name      string
+	Namespace string
+	Data      map[string]string
 }
 
 var configMapList []configMap
 
 func NewConfigMap() *configMap {
 	return &configMap{
-		Name: "",
-		Data: make(map[string]string),
+		Name:      "",
+		Data:      make(map[string]string),
+		Namespace: "",
 	}
 }
 
 func (cm *configMap) Run(client *kubernetes.Clientset, ctx context.Context) {
 	// create a shared informer factory
-	//factory := informer.NewSharedInformerFactory(client, 0)
 	factory := informer.NewSharedInformerFactoryWithOptions(client, 0, informer.WithNamespace(v1.NamespaceAll),
 		informer.WithTweakListOptions(func(options *metav1.ListOptions) {
 			options.LabelSelector = "trivago.com/copy=true"
 		}))
 	// Create a ConfigMap informer
-	// This will create a ConfigMap informer that watches all namespaces and caches the ConfigMaps in memory.
 	cmInformer := factory.Core().V1().ConfigMaps().Informer()
 
 	// Add event handlers to the informer on which we should act.
@@ -63,11 +62,12 @@ func (cm *configMap) Run(client *kubernetes.Clientset, ctx context.Context) {
 func (cm *configMap) AddFunc(obj interface{}) {
 	cmObj := obj.(*v1.ConfigMap)
 	// Handle the add event
-	log.Println("Added ConfigMap: ", cmObj.Name)
+	log.Println("Added ConfigMap:", cmObj.Name)
 	// Append to configMapList list
 	configMapList = append(configMapList, configMap{
-		Name: cmObj.Name,
-		Data: cmObj.Data,
+		Name:      cmObj.Name,
+		Data:      cmObj.Data,
+		Namespace: cmObj.Namespace,
 	})
 }
 
@@ -79,57 +79,63 @@ func (cm *configMap) AddFunc(obj interface{}) {
 // 	delete(cm.configMapNames, configMap.Name)
 // }
 
-func (cm *configMap) ReadConfigMapNames() []configMap {
+func (cm *configMap) FinalConfigMaps() []configMap {
 	mapList := make([]configMap, 0)
 	for _, name := range configMapList {
 		mapList = append(mapList, configMap{
-			Name: name.Name,
-			Data: name.Data,
+			Name:      name.Name,
+			Data:      name.Data,
+			Namespace: name.Namespace,
 		})
 	}
 	return mapList
 }
 
-func (cm *configMap) PrintConfigMaps() {
+func (cm *configMap) CopyConfigMaps(clientset *kubernetes.Clientset) {
+	fmt.Print("Copying ConfigMaps \n")
+	cmObj := &v1.ConfigMap{}
 	for {
-		if len(configMapList) != 0 {
-			for _, name := range cm.ReadConfigMapNames() {
-				log.Println("Name ", name.Name)
-				log.Println("Data: ", name.Data)
-			}
-		} else {
+
+		if len(configMapList) == 0 {
 			log.Println("No ConfigMaps found")
 		}
-		time.Sleep(5 * time.Second)
-	}
 
+		for _, name := range cm.FinalConfigMaps() {
+			cmObj.Name = name.Name
+			cmObj.Data = name.Data
+			cmObj.Namespace = name.Namespace
+			_, err := clientset.CoreV1().ConfigMaps(name.Namespace).Create(context.TODO(), cmObj, metav1.CreateOptions{})
+			if error.IsAlreadyExists(err) {
+				log.Println(cmObj.Name, "is already updated.")
+			}
+		}
+		time.Sleep(5 * time.Second)
+
+	}
+}
+
+// for _, name := range cm.FinalConfigMaps() {
+
+func returnkubernetesclientset(filePath *string) *kubernetes.Clientset {
+	config, _ := clientcmd.BuildConfigFromFlags("", *filePath)
+	clientset, _ := kubernetes.NewForConfig(config)
+	return clientset
 }
 
 func main() {
-	var kubeconfig *string
-	if home := homedir.HomeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	}
-	flag.Parse()
-	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		panic(err.Error())
-	}
+	sk := flag.String("sk", "", "absolute path to the sk file")
+	dk := flag.String("dk", "", "absolute path to the dk file")
 
-	// create the clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
+	flag.Parse()
+
+	sourceClientSet := returnkubernetesclientset(sk)
+	destClientSet := returnkubernetesclientset(dk)
 	// create a context
 	ctx, _ := context.WithCancel(context.Background())
 
 	cm := NewConfigMap()
 	fmt.Println("Starting ConfigMap controller")
-	go cm.PrintConfigMaps()
-	cm.Run(clientset, ctx)
-
+	// go cm.PrintConfigMaps()
+	go cm.CopyConfigMaps(destClientSet)
+	cm.Run(sourceClientSet, ctx)
 }
